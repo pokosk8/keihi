@@ -1,5 +1,5 @@
-<!DOCTYPE html>
-<html lang="ja">
+TYPE html>
+html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -18,7 +18,7 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--paper);color:var(--i
 #lock p{color:#aab8cc;font-size:12px;margin-bottom:28px;letter-spacing:.05em;}
 #lock .box{width:100%;max-width:260px;}
 #lock input{width:100%;padding:14px;border:none;border-radius:8px;font-size:20px;text-align:center;letter-spacing:.4em;font-family:inherit;margin-bottom:12px;}
-#lock button{width:100%;padding:13px;border:none;border-radius:8px;background:#fff;color:var(--navy);font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;}
+#lock button{width:100%;padding:13px;border:none;border-radius:8px;background:#fff<;color:var(--navy);font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;}
 #lock .err{color:#ff9b82;font-size:12px;text-align:center;min-height:18px;margin-top:10px;}
 
 #app{display:none;max-width:600px;margin:0 auto;}
@@ -91,6 +91,8 @@ footer .btn-export:disabled{background:var(--muted);}
     <input type="text" id="pw" inputmode="numeric" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" name="kou-pw-field" placeholder="••••" style="-webkit-text-security:disc;">
     <button id="unlockBtn">開く</button>
     <div class="err" id="pwErr"></div>
+    <div style="margin-top:6px;color:#7d8ca3;font-size:11px;text-align:center;">ヒント：6月27日</div>
+    <div style="margin-top:18px;text-align:center;"><a href="#" id="skipLink" style="color:#5a6b85;font-size:11px;text-decoration:underline;">パスワードなしで開く</a></div>
   </div>
 </div>
 
@@ -142,8 +144,9 @@ const lockEl=document.getElementById('lock'),appEl=document.getElementById('app'
 function tryUnlock(){if(pwInput.value.trim()===PASSWORD){lockEl.style.display='none';appEl.style.display='block';}else{pwErr.textContent='パスワードが違います（入力'+pwInput.value.trim().length+'文字）';pwInput.value='';}}
 document.getElementById('unlockBtn').addEventListener('click',tryUnlock);
 pwInput.addEventListener('keydown',e=>{if(e.key==='Enter')tryUnlock();});
+document.getElementById('skipLink').addEventListener('click',e=>{e.preventDefault();lockEl.style.display='none';appEl.style.display='block';});
 
-const ORS_KEY="eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjFiNWRiZGRkZmFiZTRjYTQ4NTYxY2E5YjlmOTVjMGIxIiwiaCI6Im11cm11cjY0In0=";
+const GOOGLE_KEY="AIzaSyDd7TEpftcMyAnCw4XfIUpyhuqqV_L7J-I"; // ← ここを自分のGoogle APIキー(AIza...)に差し替える
 const entries=[];
 let mode='oneway';
 
@@ -197,19 +200,36 @@ document.getElementById('seg').addEventListener('click',e=>{
 function setStatus(t,m){statusEl.className='status'+(t?' '+t:'');statusEl.textContent=m||'';}
 
 async function geocode(text){
-  const url=`https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}&text=${encodeURIComponent(text)}&size=1&boundary.country=JP`;
+  const url=`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(text)}&region=jp&language=ja&key=${GOOGLE_KEY}`;
   const res=await fetch(url);
-  if(!res.ok){if(res.status===403||res.status===401)throw new Error('APIキーが無効、または利用上限に達しています。');throw new Error(`場所検索でエラー(${res.status})が発生しました。`);}
+  if(!res.ok)throw new Error(`場所検索でエラー(${res.status})が発生しました。`);
   const data=await res.json();
-  if(!data.features||!data.features.length)throw new Error(`「${text}」が見つかりませんでした。詳しい地名で試してください。`);
-  return data.features[0].geometry.coordinates;
+  if(data.status==='REQUEST_DENIED')throw new Error('APIキーが無効か、制限設定が合っていません。'+(data.error_message||''));
+  if(data.status==='OVER_QUERY_LIMIT')throw new Error('利用上限に達しました。');
+  if(data.status!=='OK'||!data.results.length)throw new Error(`「${text}」が見つかりませんでした。市区町村名を付けて試してください。`);
+  const loc=data.results[0].geometry.location;
+  return [loc.lng,loc.lat]; // [経度,緯度] で従来コードと互換
 }
 async function legKm(a,b){
-  const url=`https://api.openrouteservice.org/v2/directions/driving-car?api_key=${ORS_KEY}&start=${a[0]},${a[1]}&end=${b[0]},${b[1]}`;
+  // a,b は [経度,緯度]。Google Directionsは 緯度,経度 の順で渡す
+  const origin=`${a[1]},${a[0]}`,dest=`${b[1]},${b[0]}`;
+  const url=`https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${dest}&mode=driving&language=ja&key=${GOOGLE_KEY}`;
   const res=await fetch(url);
-  if(!res.ok){if(res.status===403||res.status===401)throw new Error('APIキーが無効、または利用上限に達しています。');throw new Error(`距離計算でエラー(${res.status})が発生しました。`);}
+  if(!res.ok)throw new Error(`距離計算でエラー(${res.status})が発生しました。`);
   const data=await res.json();
-  return data.features[0].properties.summary.distance/1000;
+  if(data.status==='REQUEST_DENIED')throw new Error('APIキーが無効か、制限設定が合っていません。'+(data.error_message||''));
+  if(data.status==='OVER_QUERY_LIMIT')throw new Error('利用上限に達しました。');
+  if(data.status!=='OK'||!data.routes.length)throw new Error('ルートが見つかりませんでした。');
+  // 全leg合算(経由なし単区間なので通常1leg)
+  const meters=data.routes[0].legs.reduce((s,l)=>s+l.distance.value,0);
+  return meters/1000;
+}
+// 緯度経度から直線距離(km)。geocodeミス検出用
+function straightKm(a,b){
+  const R=6371,toR=d=>d*Math.PI/180;
+  const dLat=toR(b[1]-a[1]),dLon=toR(b[0]-a[0]);
+  const s=Math.sin(dLat/2)**2+Math.cos(toR(a[1]))*Math.cos(toR(b[1]))*Math.sin(dLon/2)**2;
+  return R*2*Math.asin(Math.sqrt(s));
 }
 
 function modeLabel(m){return m==='round'?'往復':m==='loop'?'周回':'片道';}
@@ -244,6 +264,13 @@ calcBtn.addEventListener('click',async()=>{
   try{
     const coords=[];
     for(const n of names){coords.push(await geocode(n));}
+    // geocodeミス検出:隣接地点が直線で500km以上離れていたら警告
+    for(let i=0;i<coords.length-1;i++){
+      if(straightKm(coords[i],coords[i+1])>500){
+        setStatus('error',`「${names[i]}」か「${names[i+1]}」の場所がうまく特定できていない可能性があります。市区町村名を付けるなど、もう少し詳しい地名で試してください。`);
+        calcBtn.disabled=false;return;
+      }
+    }
     // 各区間を順に計算
     let oneWay=0;
     for(let i=0;i<coords.length-1;i++){oneWay+=await legKm(coords[i],coords[i+1]);}
