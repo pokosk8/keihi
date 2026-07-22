@@ -215,7 +215,7 @@ function parseLatLng(text){
   if(!m)return null;
   const lat=Number(m[1]),lng=Number(m[2]);
   if(lat<-90||lat>90||lng<-180||lng>180)return null;
-  return {coord:[lng,lat], acc:'ROOFTOP', formatted:`${lat}, ${lng}(座標を直接指定)`};
+  return {coord:[lng,lat], acc:'ROOFTOP', formatted:`${lat}, ${lng}(座標を直接指定)`, direct:true};
 }
 async function geocode(text){
   // 緯度経度がそのまま入力された場合はGeocoding APIを呼ばず、その数値をそのまま使う
@@ -233,7 +233,7 @@ async function geocode(text){
   const loc=r.geometry.location;
   // 精度ランク: ROOFTOP(建物) > RANGE_INTERPOLATED(番地推定) > GEOMETRIC_CENTER(区域中心) > APPROXIMATE(おおよそ)
   const acc=r.geometry.location_type;
-  return {coord:[loc.lng,loc.lat], acc, formatted:r.formatted_address};
+  return {coord:[loc.lng,loc.lat], acc, formatted:r.formatted_address, direct:false};
 }
 async function legKm(a,b,avoidHighway){
   // a,b は [経度,緯度]。Routes APIはJSONで緯度経度を渡す。リファラー制限キーでも動く。
@@ -241,7 +241,10 @@ async function legKm(a,b,avoidHighway){
   const body={
     origin:{location:{latLng:{latitude:a[1],longitude:a[0]}}},
     destination:{location:{latLng:{latitude:b[1],longitude:b[0]}}},
-    travelMode:"DRIVE"
+    travelMode:"DRIVE",
+    routingPreference:"TRAFFIC_UNAWARE" // 交通状況を考慮しない、固定の道路網ベースの計算。
+    // 同じ2点なら何回計算しても必ず同じ距離が出るようにするため、あえてリアルタイム交通は見ない。
+    // (経費精算は「その時混んでたか」ではなく「再現性のある固定距離」であるべきなので)
   };
   if(avoidHighway)body.routeModifiers={avoidHighways:true};
   const res=await fetch(url,{
@@ -378,10 +381,14 @@ calcBtn.addEventListener('click',async()=>{
       }
     }
     const coords=geo.map(g=>g.coord);
-    // 各座標を道路上にスナップして、遠回りルートによる距離割増しを防ぐ
-    // (Roads APIが無効・失敗の場合は元座標のまま計算されるので安全)
+    // 座標を道路上にスナップするのは「緯度経度を直接入力した地点」だけにする。
+    // 住所からちゃんとジオコーディングできた地点(施設の正面玄関など)は既に道路アクセスを
+    // 考慮した位置になっているため、そこにさらにスナップをかけると逆に数十m〜ズレて
+    // 違うIC・ランプを選んでしまい、距離が変わる原因になるため。
     setStatus('loading','座標を道路上に補正して距離を計算しています…');
-    for(let i=0;i<coords.length;i++){coords[i]=await snapToRoad(coords[i]);}
+    for(let i=0;i<coords.length;i++){
+      if(geo[i].direct)coords[i]=await snapToRoad(coords[i]);
+    }
     // geocodeミス検出:隣接地点が直線で300km以上離れていたら警告
     for(let i=0;i<coords.length-1;i++){
       if(straightKm(coords[i],coords[i+1])>300){
