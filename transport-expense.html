@@ -331,30 +331,45 @@ function render(){
 entriesEl.addEventListener('click',ev=>{if(ev.target.dataset.i!==undefined){entries.splice(Number(ev.target.dataset.i),1);render();}});
 
 // 区間ごとの高速/下道 選択パネルを描画
+function legDist(l){return l.override!=null?l.override:(l.choice==='highway'?l.distHighway:l.distLocal);}
 function renderLegChoices(){
   legChoicesEl.innerHTML=legs.map((leg,i)=>`
-    <div style="margin-bottom:10px;">
+    <div style="margin-bottom:14px;">
       <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">${leg.label}</label>
       <div class="seg">
         <button type="button" data-leg="${i}" data-choice="highway" class="${leg.choice==='highway'?'on':''}">高速 ${leg.distHighway.toFixed(1)}km</button>
         <button type="button" data-leg="${i}" data-choice="local" class="${leg.choice==='local'?'on':''}">下道 ${leg.distLocal.toFixed(1)}km</button>
       </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
+        <label style="font-size:11px;color:var(--muted);margin:0;white-space:nowrap;">実際の距離(km、手入力で調整可)</label>
+        <input type="number" step="0.1" min="0" data-leg-input="${i}" value="${legDist(leg).toFixed(1)}" style="width:80px;padding:6px;border:1px solid var(--line);border-radius:4px;font-family:inherit;">
+      </div>
     </div>`).join('');
   updateChoiceSummary();
 }
 function updateChoiceSummary(){
-  const totalKm=legs.reduce((s,l)=>s+(l.choice==='highway'?l.distHighway:l.distLocal),0);
+  const totalKm=legs.reduce((s,l)=>s+legDist(l),0);
   const amount=Math.round(totalKm*pending.rate);
   choiceSummaryEl.textContent=`合計 ${totalKm.toFixed(1)}km ／ ¥${amount.toLocaleString()}`;
 }
 legChoicesEl.addEventListener('click',ev=>{
   const b=ev.target.closest('button[data-leg]');
   if(!b)return;
-  legs[Number(b.dataset.leg)].choice=b.dataset.choice;
+  const leg=legs[Number(b.dataset.leg)];
+  leg.choice=b.dataset.choice;
+  leg.override=null; // 高速/下道を選び直したら、手入力の上書きはリセットしてボタンの値に戻す
   renderLegChoices();
 });
+legChoicesEl.addEventListener('change',ev=>{
+  const inp=ev.target.closest('input[data-leg-input]');
+  if(!inp)return;
+  const leg=legs[Number(inp.dataset.legInput)];
+  const v=Number(inp.value);
+  leg.override=isNaN(v)||v<0?null:v; // 手入力があればそれを最優先、空や不正値ならボタンの値に戻す
+  updateChoiceSummary();
+});
 confirmRouteBtn.addEventListener('click',()=>{
-  const totalKm=legs.reduce((s,l)=>s+(l.choice==='highway'?l.distHighway:l.distLocal),0);
+  const totalKm=legs.reduce((s,l)=>s+legDist(l),0);
   const amount=Math.round(totalKm*pending.rate);
   entries.push({date:pending.date,points:pending.points,mode:pending.mode,totalKm,rate:pending.rate,amount,legChoices:legs.map(l=>l.choice)});
   render();
@@ -362,6 +377,7 @@ confirmRouteBtn.addEventListener('click',()=>{
   pending=null;legs=[];
   ptList.innerHTML='';addPoint();addPoint();
 });
+
 
 calcBtn.addEventListener('click',async()=>{
   const names=[...ptList.querySelectorAll('.pt-item input')].map(i=>i.value.trim());
@@ -381,14 +397,10 @@ calcBtn.addEventListener('click',async()=>{
       }
     }
     const coords=geo.map(g=>g.coord);
-    // 座標を道路上にスナップするのは「緯度経度を直接入力した地点」だけにする。
-    // 住所からちゃんとジオコーディングできた地点(施設の正面玄関など)は既に道路アクセスを
-    // 考慮した位置になっているため、そこにさらにスナップをかけると逆に数十m〜ズレて
-    // 違うIC・ランプを選んでしまい、距離が変わる原因になるため。
-    setStatus('loading','座標を道路上に補正して距離を計算しています…');
-    for(let i=0;i<coords.length;i++){
-      if(geo[i].direct)coords[i]=await snapToRoad(coords[i]);
-    }
+    // 【Roads APIによる座標補正は廃止】
+    // 先月動いていたバージョンとの比較で、この補正処理そのものが
+    // 数十m単位で座標をズラし、それが行き方向だけ違うICを選ばせる原因になっていた
+    // 可能性が高いと判明したため、無効化した。入力された座標をそのまま使う。
     // geocodeミス検出:隣接地点が直線で300km以上離れていたら警告
     for(let i=0;i<coords.length-1;i++){
       if(straightKm(coords[i],coords[i+1])>300){
