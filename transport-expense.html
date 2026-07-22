@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+.<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -122,6 +122,12 @@ footer .btn-export:disabled{background:var(--muted);}
 
       <button class="btn-primary" id="calcBtn">距離を計算して追加</button>
       <div class="status" id="status"></div>
+      <div id="routeChoice" style="display:none;margin-top:12px;">
+        <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">区間ごとに実際に通ったルートを選んでください</p>
+        <div id="legChoices"></div>
+        <div style="font-size:14px;font-weight:700;margin:6px 0 10px;text-align:right;color:var(--navy);" id="choiceSummary"></div>
+        <button class="btn-primary" id="confirmRouteBtn">この内容で登録</button>
+      </div>
     </div>
 
     <div class="ledger">
@@ -149,12 +155,16 @@ document.getElementById('skipLink').addEventListener('click',e=>{e.preventDefaul
 const GOOGLE_KEY="AIzaSyDd7TEpftcMyAnCw4XfIUpyhuqqV_L7J-I"; // ← ここを自分のGoogle APIキー(AIza...)に差し替える
 const entries=[];
 let mode='oneway';
+let pending=null; // 計算完了後、登録確定待ちの内容(日付・地点・単価・区間ごとの候補)
+let legs=[]; // [{label, distHighway, distLocal, choice}]
 
 const dateInput=document.getElementById('date'),rateInput=document.getElementById('rate'),
   ptList=document.getElementById('ptList'),calcBtn=document.getElementById('calcBtn'),
   statusEl=document.getElementById('status'),entriesEl=document.getElementById('entries'),
   totalAmountEl=document.getElementById('totalAmount'),totalCell=document.getElementById('totalCell'),
-  exportBtn=document.getElementById('exportBtn');
+  exportBtn=document.getElementById('exportBtn'),
+  routeChoiceEl=document.getElementById('routeChoice'),legChoicesEl=document.getElementById('legChoices'),
+  choiceSummaryEl=document.getElementById('choiceSummary'),confirmRouteBtn=document.getElementById('confirmRouteBtn');
 dateInput.value=new Date().toISOString().slice(0,10);
 
 /* 地点欄の管理(最低2個) */
@@ -199,7 +209,19 @@ document.getElementById('seg').addEventListener('click',e=>{
 
 function setStatus(t,m){statusEl.className='status'+(t?' '+t:'');statusEl.textContent=m||'';}
 
+// 「35.878344, 136.743341」のような緯度経度が直接入力された場合はこれで検出する
+function parseLatLng(text){
+  const m=text.match(/^\s*(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
+  if(!m)return null;
+  const lat=Number(m[1]),lng=Number(m[2]);
+  if(lat<-90||lat>90||lng<-180||lng>180)return null;
+  return {coord:[lng,lat], acc:'ROOFTOP', formatted:`${lat}, ${lng}(座標を直接指定)`};
+}
 async function geocode(text){
+  // 緯度経度がそのまま入力された場合はGeocoding APIを呼ばず、その数値をそのまま使う
+  // (PC/スマホでコピーした座標の桁数の違いなどでGoogle側の解釈がブレるのを防ぐため)
+  const direct=parseLatLng(text);
+  if(direct)return direct;
   const url=`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(text)}&region=jp&language=ja&key=${GOOGLE_KEY}`;
   const res=await fetch(url);
   if(!res.ok)throw new Error(`場所検索でエラー(${res.status})が発生しました。`);
@@ -213,7 +235,7 @@ async function geocode(text){
   const acc=r.geometry.location_type;
   return {coord:[loc.lng,loc.lat], acc, formatted:r.formatted_address};
 }
-async function legKm(a,b){
+async function legKm(a,b,avoidHighway){
   // a,b は [経度,緯度]。Routes APIはJSONで緯度経度を渡す。リファラー制限キーでも動く。
   const url=`https://routes.googleapis.com/directions/v2:computeRoutes?key=${GOOGLE_KEY}`;
   const body={
@@ -221,6 +243,7 @@ async function legKm(a,b){
     destination:{location:{latLng:{latitude:b[1],longitude:b[0]}}},
     travelMode:"DRIVE"
   };
+  if(avoidHighway)body.routeModifiers={avoidHighways:true};
   const res=await fetch(url,{
     method:"POST",
     headers:{"Content-Type":"application/json","X-Goog-FieldMask":"routes.distanceMeters"},
@@ -235,6 +258,36 @@ async function legKm(a,b){
   if(!data.routes||!data.routes.length)throw new Error('ルートが見つかりませんでした。');
   return data.routes[0].distanceMeters/1000;
 }
+// Roads APIで座標を「一番近い道路上の点」に補正する。
+// 座標が敷地内や道路から少し外れた位置にあると、Directions/Routes APIが
+// 遠回りのアクセスルートを選んで距離が割増しになることがあるため、その対策。
+// Roads APIが無効(403)・失敗・応答なしの場合は元の座標をそのまま返す(フォールバック)。
+async function snapToRoad(coord){
+  // coord は [経度,緯度]。Roads APIは 緯度,経度 の順で渡す
+  try{
+    const path=`${coord[1]},${coord[0]}`;
+    const url=`https://roads.googleapis.com/v1/nearestRoads?points=${path}&key=${GOOGLE_KEY}`;
+    const res=await fetch(url);
+    if(!res.ok){
+      let msg='';try{const e=await res.json();msg=e.error&&e.error.message?e.error.message:'';}catch(_){}
+      console.warn('[snapToRoad] Roads API失敗、元座標を使用します。status=',res.status,msg);
+      return coord; // 403(未有効化/キー制限)などはそのまま元座標へ
+    }
+    const data=await res.json();
+    if(!data.snappedPoints||!data.snappedPoints.length){
+      console.warn('[snapToRoad] snappedPointsが空、元座標を使用します。',data);
+      return coord;
+    }
+    const p=data.snappedPoints[0].location; // {latitude, longitude}
+    const snapped=[p.longitude, p.latitude];
+    const shiftM=Math.round(straightKm(coord,snapped)*1000);
+    console.log(`[snapToRoad] 補正成功: 元(${coord[1]},${coord[0]}) → 補正後(${p.latitude},${p.longitude}) 移動量=${shiftM}m`);
+    return snapped;
+  }catch(err){
+    console.warn('[snapToRoad] 通信エラー、元座標を使用します。',err);
+    return coord; // 通信エラー時も元座標にフォールバック
+  }
+}
 // 緯度経度から直線距離(km)。geocodeミス検出用
 function straightKm(a,b){
   const R=6371,toR=d=>d*Math.PI/180;
@@ -245,6 +298,14 @@ function straightKm(a,b){
 
 function modeLabel(m){return m==='round'?'往復':m==='loop'?'周回':'片道';}
 
+function routeSummaryLabel(e){
+  if(!e.legChoices||!e.legChoices.length)return '';
+  const allH=e.legChoices.every(c=>c==='highway'),allL=e.legChoices.every(c=>c==='local');
+  if(allH)return '<span class="tag" style="border-color:#2563a8;color:#2563a8;">高速</span>';
+  if(allL)return '<span class="tag" style="border-color:#6b6657;color:#6b6657;">下道</span>';
+  return '<span class="tag" style="border-color:#b23a17;color:#b23a17;">混在</span>';
+}
+
 function render(){
   entriesEl.innerHTML='';
   if(!entries.length){entriesEl.innerHTML='<tr class="empty"><td colspan="5">まだ区間が追加されていません</td></tr>';exportBtn.disabled=true;}
@@ -252,9 +313,9 @@ function render(){
     exportBtn.disabled=false;
     entries.forEach((e,i)=>{
       const tr=document.createElement('tr');
-      const routeText=e.points.join(' → ')+(e.mode==='loop'?' → '+e.points[0]:'');
+      const routeText=e.points.join(' → ')+((e.mode==='loop'||e.mode==='round')?' → '+e.points[0]:'');
       tr.innerHTML=`<td>${e.date.slice(5).replace('-','/')}</td>`+
-        `<td class="t-route">${routeText}<span class="tag">${modeLabel(e.mode)}</span><span class="sub">${e.totalKm.toFixed(1)}km ／ ${e.rate}円</span></td>`+
+        `<td class="t-route">${routeText}<span class="tag">${modeLabel(e.mode)}</span>${routeSummaryLabel(e)}<span class="sub">${e.totalKm.toFixed(1)}km ／ ${e.rate}円</span></td>`+
         `<td>${e.totalKm.toFixed(1)}km</td><td class="t-yen">¥${e.amount.toLocaleString()}</td>`+
         `<td class="t-del"><button data-i="${i}" aria-label="削除">×</button></td>`;
       entriesEl.appendChild(tr);
@@ -266,12 +327,46 @@ function render(){
 }
 entriesEl.addEventListener('click',ev=>{if(ev.target.dataset.i!==undefined){entries.splice(Number(ev.target.dataset.i),1);render();}});
 
+// 区間ごとの高速/下道 選択パネルを描画
+function renderLegChoices(){
+  legChoicesEl.innerHTML=legs.map((leg,i)=>`
+    <div style="margin-bottom:10px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">${leg.label}</label>
+      <div class="seg">
+        <button type="button" data-leg="${i}" data-choice="highway" class="${leg.choice==='highway'?'on':''}">高速 ${leg.distHighway.toFixed(1)}km</button>
+        <button type="button" data-leg="${i}" data-choice="local" class="${leg.choice==='local'?'on':''}">下道 ${leg.distLocal.toFixed(1)}km</button>
+      </div>
+    </div>`).join('');
+  updateChoiceSummary();
+}
+function updateChoiceSummary(){
+  const totalKm=legs.reduce((s,l)=>s+(l.choice==='highway'?l.distHighway:l.distLocal),0);
+  const amount=Math.round(totalKm*pending.rate);
+  choiceSummaryEl.textContent=`合計 ${totalKm.toFixed(1)}km ／ ¥${amount.toLocaleString()}`;
+}
+legChoicesEl.addEventListener('click',ev=>{
+  const b=ev.target.closest('button[data-leg]');
+  if(!b)return;
+  legs[Number(b.dataset.leg)].choice=b.dataset.choice;
+  renderLegChoices();
+});
+confirmRouteBtn.addEventListener('click',()=>{
+  const totalKm=legs.reduce((s,l)=>s+(l.choice==='highway'?l.distHighway:l.distLocal),0);
+  const amount=Math.round(totalKm*pending.rate);
+  entries.push({date:pending.date,points:pending.points,mode:pending.mode,totalKm,rate:pending.rate,amount,legChoices:legs.map(l=>l.choice)});
+  render();
+  routeChoiceEl.style.display='none';
+  pending=null;legs=[];
+  ptList.innerHTML='';addPoint();addPoint();
+});
+
 calcBtn.addEventListener('click',async()=>{
   const names=[...ptList.querySelectorAll('.pt-item input')].map(i=>i.value.trim());
   if(names.some(n=>!n)){setStatus('error','すべての地点を入力してください。');return;}
   if(names.length<2){setStatus('error','出発地と到着地が必要です。');return;}
   const rate=Number(rateInput.value)||0,date=dateInput.value;
   calcBtn.disabled=true;setStatus('loading','住所を検索して距離を計算しています…');
+  routeChoiceEl.style.display='none';
   try{
     const geo=[];
     for(const n of names){geo.push(await geocode(n));}
@@ -283,6 +378,10 @@ calcBtn.addEventListener('click',async()=>{
       }
     }
     const coords=geo.map(g=>g.coord);
+    // 各座標を道路上にスナップして、遠回りルートによる距離割増しを防ぐ
+    // (Roads APIが無効・失敗の場合は元座標のまま計算されるので安全)
+    setStatus('loading','座標を道路上に補正して距離を計算しています…');
+    for(let i=0;i<coords.length;i++){coords[i]=await snapToRoad(coords[i]);}
     // geocodeミス検出:隣接地点が直線で300km以上離れていたら警告
     for(let i=0;i<coords.length-1;i++){
       if(straightKm(coords[i],coords[i+1])>300){
@@ -290,30 +389,37 @@ calcBtn.addEventListener('click',async()=>{
         calcBtn.disabled=false;return;
       }
     }
-    // 各区間を順に計算
-    let oneWay=0;
-    for(let i=0;i<coords.length-1;i++){oneWay+=await legKm(coords[i],coords[i+1]);}
-    let totalKm=oneWay;
-    if(mode==='round'){totalKm=oneWay*2;}
-    else if(mode==='loop'){totalKm=oneWay+await legKm(coords[coords.length-1],coords[0]);}
-    const amount=Math.round(totalKm*rate);
-    entries.push({date,points:[...names],mode,totalKm,rate,amount});
-    render();setStatus('','');
-    // 入力欄リセット(地点は2個に戻す)
-    ptList.innerHTML='';addPoint();addPoint();
+    // 区間(leg)の一覧を組み立てる。往復・周回は「帰り」区間も同じ扱いで実際に計算する
+    // (往復=片道×2という仮定はやめて、周回と同じく行き帰り両方を実測する)
+    const legDefs=[];
+    for(let i=0;i<coords.length-1;i++){legDefs.push({a:coords[i],b:coords[i+1],label:`行き: ${names[i]} → ${names[i+1]}`});}
+    if(mode==='round'||mode==='loop'){legDefs.push({a:coords[coords.length-1],b:coords[0],label:`帰り: ${names[names.length-1]} → ${names[0]}`});}
+    // 各区間ごとに「高速道路を使う場合」「避ける場合」の両方を計算
+    setStatus('loading','高速道路を使う場合と使わない場合、両方のルートを計算しています…');
+    legs=[];
+    for(const def of legDefs){
+      const distHighway=await legKm(def.a,def.b,false);
+      const distLocal=await legKm(def.a,def.b,true);
+      legs.push({label:def.label,distHighway,distLocal,choice:'highway'}); // 初期値は高速道路優先
+    }
+    pending={date,points:[...names],mode,rate};
+    renderLegChoices();
+    routeChoiceEl.style.display='block';
+    setStatus('','');
   }catch(err){setStatus('error',err.message||'通信エラーが発生しました。電波状況を確認して再度お試しください。');}
   finally{calcBtn.disabled=false;}
 });
 
 exportBtn.addEventListener('click',()=>{
-  const rows=[['日付','経路','移動タイプ','距離(km)','単価(円/km)','金額(円)']];
+  const rows=[['日付','経路','移動タイプ','ルート','距離(km)','単価(円/km)','金額(円)']];
   entries.forEach(e=>{
-    const routeText=e.points.join(' → ')+(e.mode==='loop'?' → '+e.points[0]:'');
-    rows.push([e.date,routeText,modeLabel(e.mode),Number(e.totalKm.toFixed(1)),e.rate,e.amount]);
+    const routeText=e.points.join(' → ')+((e.mode==='loop'||e.mode==='round')?' → '+e.points[0]:'');
+    const rl=!e.legChoices?'':e.legChoices.every(c=>c==='highway')?'高速道路':e.legChoices.every(c=>c==='local')?'下道':'混在';
+    rows.push([e.date,routeText,modeLabel(e.mode),rl,Number(e.totalKm.toFixed(1)),e.rate,e.amount]);
   });
-  rows.push(['','','','','合計',entries.reduce((s,e)=>s+e.amount,0)]);
+  rows.push(['','','','','','合計',entries.reduce((s,e)=>s+e.amount,0)]);
   const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols']=[{wch:11},{wch:30},{wch:10},{wch:10},{wch:12},{wch:10}];
+  ws['!cols']=[{wch:11},{wch:30},{wch:10},{wch:10},{wch:10},{wch:12},{wch:10}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'交通費');
   XLSX.writeFile(wb,`交通費請求書_${new Date().toISOString().slice(0,10)}.xlsx`);
