@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+.<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -91,8 +91,6 @@ footer .btn-export:disabled{background:var(--muted);}
     <input type="text" id="pw" inputmode="numeric" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" name="kou-pw-field" placeholder="••••" style="-webkit-text-security:disc;">
     <button id="unlockBtn">開く</button>
     <div class="err" id="pwErr"></div>
-    <div style="margin-top:6px;color:#7d8ca3;font-size:11px;text-align:center;">ヒント：6月27日</div>
-    <div style="margin-top:18px;text-align:center;"><a href="#" id="skipLink" style="color:#5a6b85;font-size:11px;text-decoration:underline;">パスワードなしで開く</a></div>
   </div>
 </div>
 
@@ -151,7 +149,6 @@ const lockEl=document.getElementById('lock'),appEl=document.getElementById('app'
 function tryUnlock(){if(pwInput.value.trim()===PASSWORD){lockEl.style.display='none';appEl.style.display='block';}else{pwErr.textContent='パスワードが違います（入力'+pwInput.value.trim().length+'文字）';pwInput.value='';}}
 document.getElementById('unlockBtn').addEventListener('click',tryUnlock);
 pwInput.addEventListener('keydown',e=>{if(e.key==='Enter')tryUnlock();});
-document.getElementById('skipLink').addEventListener('click',e=>{e.preventDefault();lockEl.style.display='none';appEl.style.display='block';});
 
 const GOOGLE_KEY="AIzaSyDd7TEpftcMyAnCw4XfIUpyhuqqV_L7J-I"; // ← ここを自分のGoogle APIキー(AIza...)に差し替える
 const entries=[];
@@ -451,4 +448,4 @@ exportBtn.addEventListener('click',()=>{
 });
 </script>
 </body>
-</html>.
+</html>
