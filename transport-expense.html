@@ -259,7 +259,11 @@ async function legKm(a,b,avoidHighway){
   if(!data.routes||!data.routes.length)throw new Error('ルートが見つかりませんでした。');
   // 経費精算は「到着時間」より「移動距離」を優先すべきなので、SHORTER_DISTANCEラベルの付いたルートがあればそちらを採用する
   const shorter=data.routes.find(r=>r.routeLabels&&r.routeLabels.includes('SHORTER_DISTANCE'));
-  return (shorter||data.routes[0]).distanceMeters/1000;
+  const route=shorter||data.routes[0];
+  // 応答に距離が含まれない場合(出発地と到着地がほぼ同じ等)は、NaNにせずエラーにする
+  if(!Number.isFinite(route.distanceMeters))throw new Error('距離を取得できませんでした。出発地と到着地が同じ場所になっていないか確認してください。');
+  // kind: 距離優先ルートが取れたか(shorter)、時間優先の既定ルートに頼ったか(default)
+  return {km:route.distanceMeters/1000,kind:shorter?'shorter':'default'};
 }
 // Roads APIで座標を「一番近い道路上の点」に補正する。
 // 座標が敷地内や道路から少し外れた位置にあると、Directions/Routes APIが
@@ -333,6 +337,8 @@ entriesEl.addEventListener('click',ev=>{if(ev.target.dataset.i!==undefined){entr
 // 区間ごとの高速/下道 選択パネルを描画
 // override(手入力)があればそれを最優先、なければ選択中のボタンの値を使う
 function legDist(l){return l.override!=null?l.override:(l.choice==='highway'?l.distHighway:l.distLocal);}
+// 選択中のルートが「距離優先(shorter)」か「時間優先の既定ルート(default)」か
+function legKind(l){return l.choice==='highway'?l.kindHighway:l.kindLocal;}
 function renderLegChoices(){
   legChoicesEl.innerHTML=legs.map((leg,i)=>`
     <div style="margin-bottom:14px;">
@@ -341,6 +347,7 @@ function renderLegChoices(){
         <button type="button" data-leg="${i}" data-choice="highway" class="${leg.choice==='highway'?'on':''}">高速 ${leg.distHighway.toFixed(1)}km</button>
         <button type="button" data-leg="${i}" data-choice="local" class="${leg.choice==='local'?'on':''}">下道 ${leg.distLocal.toFixed(1)}km</button>
       </div>
+      ${legKind(leg)==='default'?'<div style="font-size:11px;color:var(--danger);margin-top:6px;">※この区間は距離優先ルートが取れず、時間優先ルートの距離です。行きと帰りで差が出る場合があります。必要なら下の欄で手入力してください。</div>':''}
       <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
         <label style="font-size:11px;color:var(--muted);margin:0;white-space:nowrap;">実際の距離(km、手入力で調整可)</label>
         <input type="number" step="0.1" min="0" data-leg-input="${i}" value="${legDist(leg).toFixed(1)}" style="width:80px;padding:6px;border:1px solid var(--line);border-radius:4px;font-family:inherit;">
@@ -420,9 +427,9 @@ calcBtn.addEventListener('click',async()=>{
     setStatus('loading','高速道路を使う場合と使わない場合、両方のルートを計算しています…');
     legs=[];
     for(const def of legDefs){
-      const distHighway=await legKm(def.a,def.b,false);
-      const distLocal=await legKm(def.a,def.b,true);
-      legs.push({label:def.label,distHighway,distLocal,choice:'highway'}); // 初期値は高速道路優先
+      const h=await legKm(def.a,def.b,false);
+      const l=await legKm(def.a,def.b,true);
+      legs.push({label:def.label,distHighway:h.km,distLocal:l.km,kindHighway:h.kind,kindLocal:l.kind,choice:'highway'}); // 初期値は高速道路優先
     }
     pending={date,points:[...names],mode,rate};
     renderLegChoices();
