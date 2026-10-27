@@ -32,7 +32,7 @@ main{padding:16px 14px 110px;}
 .row{display:flex;gap:10px;margin-bottom:11px;}
 .row>div{flex:1;}
 label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;letter-spacing:.04em;}
-input[type=text],input[type=date],input[type=number]{width:100%;padding:10px;border:1px solid var(--line);border-radius:5px;font-size:15px;background:#fff;color:var(--ink);font-family:inherit;}
+input[type=text],input[type=password],input[type=date],input[type=number]{width:100%;padding:10px;border:1px solid var(--line);border-radius:5px;font-size:15px;background:#fff;color:var(--ink);font-family:inherit;}
 input:focus{outline:2px solid var(--accent);outline-offset:1px;}
 
 /* 地点リスト */
@@ -136,6 +136,15 @@ footer .btn-export:disabled{background:var(--muted);}
         <tfoot><tr><td colspan="3" class="label">合計金額</td><td colspan="2" class="sum" id="totalCell">¥0</td></tr></tfoot>
       </table>
     </div>
+    <details class="card" id="keyBox">
+      <summary style="font-size:14px;font-weight:700;color:var(--navy);cursor:pointer;">APIキー設定</summary>
+      <p id="keyStatus" style="font-size:12px;color:var(--muted);margin:10px 0;"></p>
+      <input type="password" id="keyInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" name="keihi-gkey-field" placeholder="AIza...">
+      <div class="row" style="margin-top:10px;margin-bottom:0;">
+        <div><button class="btn-primary" id="keySaveBtn" type="button">保存</button></div>
+        <div><button class="btn-primary" id="keyClearBtn" type="button" style="background:var(--muted);">削除</button></div>
+      </div>
+    </details>
   </main>
   <footer>
     <div class="total"><div class="label">合計</div><div class="amount" id="totalAmount">¥0</div></div>
@@ -150,7 +159,33 @@ function tryUnlock(){if(pwInput.value.trim()===PASSWORD){lockEl.style.display='n
 document.getElementById('unlockBtn').addEventListener('click',tryUnlock);
 pwInput.addEventListener('keydown',e=>{if(e.key==='Enter')tryUnlock();});
 
-const GOOGLE_KEY="AIzaSyDd7TEpftcMyAnCw4XfIUpyhuqqV_L7J-I"; // ← ここを自分のGoogle APIキー(AIza...)に差し替える
+// APIキーはコードに埋め込まず、この端末のブラウザ(localStorage)にだけ保存する
+const KEY_STORAGE='keihi_google_api_key';
+function loadKey(){try{return (localStorage.getItem(KEY_STORAGE)||'').trim();}catch(_){return '';}}
+function saveKey(k){try{localStorage.setItem(KEY_STORAGE,k);return true;}catch(_){return false;}}
+function clearKey(){try{localStorage.removeItem(KEY_STORAGE);}catch(_){}}
+let GOOGLE_KEY=loadKey();
+const keyBox=document.getElementById('keyBox'),keyInput=document.getElementById('keyInput'),
+  keyStatus=document.getElementById('keyStatus'),keySaveBtn=document.getElementById('keySaveBtn'),keyClearBtn=document.getElementById('keyClearBtn');
+function refreshKeyUI(){
+  if(GOOGLE_KEY){
+    keyStatus.textContent='保存済み(末尾 '+GOOGLE_KEY.slice(-4)+')。このブラウザの中だけに保存されています。';
+    keyClearBtn.style.display='';keyBox.open=false;
+  }else{
+    keyStatus.textContent='APIキーが未設定です。Google CloudのAPIキーを入力して保存してください。';
+    keyClearBtn.style.display='none';keyBox.open=true;
+  }
+}
+keySaveBtn.addEventListener('click',()=>{
+  const v=keyInput.value.trim();
+  if(!/^AIza[0-9A-Za-z_-]{20,}$/.test(v)){keyStatus.textContent='APIキーの形式が違うようです(AIzaから始まる文字列)。もう一度確認してください。';return;}
+  if(!saveKey(v)){keyStatus.textContent='保存できませんでした。プライベートモードなど、ブラウザの設定を確認してください。';return;}
+  GOOGLE_KEY=v;keyInput.value='';refreshKeyUI();
+});
+keyClearBtn.addEventListener('click',()=>{
+  if(confirm('保存したAPIキーを、このブラウザから削除しますか？')){clearKey();GOOGLE_KEY='';refreshKeyUI();}
+});
+refreshKeyUI();
 const entries=[];
 let mode='oneway';
 let pending=null; // 計算完了後、登録確定待ちの内容(日付・地点・単価・区間ごとの候補)
@@ -393,6 +428,7 @@ calcBtn.addEventListener('click',async()=>{
   const names=[...ptList.querySelectorAll('.pt-item input')].map(i=>i.value.trim());
   if(names.some(n=>!n)){setStatus('error','すべての地点を入力してください。');return;}
   if(names.length<2){setStatus('error','出発地と到着地が必要です。');return;}
+  if(!GOOGLE_KEY){setStatus('error','Google APIキーが未設定です。画面下の「APIキー設定」から入力してください。');keyBox.open=true;keyBox.scrollIntoView({behavior:'smooth',block:'center'});return;}
   const rate=Number(rateInput.value)||0,date=dateInput.value;
   calcBtn.disabled=true;setStatus('loading','住所を検索して距離を計算しています…');
   routeChoiceEl.style.display='none';
