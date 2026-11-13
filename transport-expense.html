@@ -100,6 +100,15 @@ footer .btn-export:disabled{background:var(--muted);}
     <h1>交通費請求書</h1>
   </header>
   <main>
+    <details class="card" id="keyBox">
+      <summary style="cursor:pointer;font-weight:700;">⚙ Google APIキー設定（初回のみ）<span id="keyState" style="font-weight:400;font-size:12px;margin-left:6px;"></span></summary>
+      <div style="margin-top:10px;">
+        <label for="keyInput">Google Maps APIキー</label>
+        <input type="text" id="keyInput" placeholder="AIza... で始まるキー" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <button class="btn-primary" id="keySave" style="margin-top:8px;">キーを保存</button>
+        <p style="font-size:11px;color:var(--muted);margin-top:8px;">キーはこの端末のブラウザ内にだけ保存され、コードやGitHubには載りません。</p>
+      </div>
+    </details>
     <div class="card">
       <h2>区間を追加</h2>
       <div class="row">
@@ -150,7 +159,19 @@ function tryUnlock(){if(pwInput.value.trim()===PASSWORD){lockEl.style.display='n
 document.getElementById('unlockBtn').addEventListener('click',tryUnlock);
 pwInput.addEventListener('keydown',e=>{if(e.key==='Enter')tryUnlock();});
 
-const GOOGLE_KEY="AIzaSyDd7TEpftcMyAnCw4XfIUpyhuqqV_L7J-I"; // ← ここを自分のGoogle APIキー(AIza...)に差し替える
+// APIキーはコードに書かず、この端末のブラウザ(localStorage)にだけ保存する。保存名は他の自作アプリと共通
+const KEY_NAME='google_maps_key';
+function loadKey(){try{return localStorage.getItem(KEY_NAME)||'';}catch(e){return '';}}
+let GOOGLE_KEY=loadKey();
+const keyInput=document.getElementById('keyInput'),keyState=document.getElementById('keyState'),keyBox=document.getElementById('keyBox');
+function refreshKeyState(){keyState.textContent=GOOGLE_KEY?'✓ 保存済み':'未設定';if(!GOOGLE_KEY)keyBox.open=true;}
+document.getElementById('keySave').addEventListener('click',()=>{
+  const v=keyInput.value.trim();
+  if(!v){alert('キーを入力してください');return;}
+  try{localStorage.setItem(KEY_NAME,v);}catch(e){alert('この環境ではキーを保存できません（プライベートモードなど）');return;}
+  GOOGLE_KEY=v;keyInput.value='';refreshKeyState();keyBox.open=false;
+});
+refreshKeyState();
 const entries=[];
 let mode='oneway';
 let pending=null; // 計算完了後、登録確定待ちの内容(日付・地点・単価・区間ごとの候補)
@@ -390,6 +411,7 @@ confirmRouteBtn.addEventListener('click',()=>{
 
 
 calcBtn.addEventListener('click',async()=>{
+  if(!GOOGLE_KEY){setStatus('error','先に上の「APIキー設定」でGoogle APIキーを保存してください。');keyBox.open=true;return;}
   const names=[...ptList.querySelectorAll('.pt-item input')].map(i=>i.value.trim());
   if(names.some(n=>!n)){setStatus('error','すべての地点を入力してください。');return;}
   if(names.length<2){setStatus('error','出発地と到着地が必要です。');return;}
