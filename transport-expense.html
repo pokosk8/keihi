@@ -135,6 +135,7 @@ footer .btn-export:disabled{background:var(--muted);}
         <div style="font-size:13px;color:var(--ink);margin-top:4px;padding-top:8px;border-top:1px solid var(--line2);" id="routeSummaryLine"></div>
         <div style="font-size:14px;font-weight:700;margin:4px 0 10px;text-align:right;color:var(--navy);" id="choiceSummary"></div>
         <button class="btn-primary" id="confirmRouteBtn">この内容で登録</button>
+        <details id="dbgBox" style="margin-top:12px;" open><summary style="font-size:12px;cursor:pointer;">診断情報（原因調べ用・スクショ用）</summary><pre id="dbgText" style="white-space:pre-wrap;word-break:break-all;font-size:11px;background:#f4f4f4;padding:8px;margin-top:6px;"></pre></details>
       </div>
     </div>
 
@@ -284,7 +285,8 @@ async function legKm(a,b,avoidHighway){
   // 応答に距離が含まれない場合(出発地と到着地がほぼ同じ等)は、NaNにせずエラーにする
   if(!Number.isFinite(route.distanceMeters))throw new Error('距離を取得できませんでした。出発地と到着地が同じ場所になっていないか確認してください。');
   // kind: 距離優先ルートが取れたか(shorter)、時間優先の既定ルートに頼ったか(default)
-  return {km:route.distanceMeters/1000,kind:shorter?'shorter':'default'};
+  const dbg=data.routes.map(r=>`${(r.routeLabels||[]).join('+')||'(ラベルなし)'}=${(r.distanceMeters/1000).toFixed(2)}km`).join(' / ');
+  return {km:route.distanceMeters/1000,kind:shorter?'shorter':'default',dbg};
 }
 // Roads APIで座標を「一番近い道路上の点」に補正する。
 // 座標が敷地内や道路から少し外れた位置にあると、Directions/Routes APIが
@@ -429,6 +431,8 @@ calcBtn.addEventListener('click',async()=>{
       }
     }
     const coords=geo.map(g=>g.coord);
+    const dbgLines=names.map((n,i)=>`地点${i+1} 「${n}」 → 緯度${geo[i].coord[1].toFixed(6)}, 経度${geo[i].coord[0].toFixed(6)} [${geo[i].acc||'-'}${geo[i].direct?'・直接入力':''}] ${geo[i].formatted||''}`);
+    dbgLines.push('モード: '+mode);
     // 【Roads APIによる座標補正は廃止】
     // 先月動いていたバージョンとの比較で、この補正処理そのものが
     // 数十m単位で座標をズラし、それが行き方向だけ違うICを選ばせる原因になっていた
@@ -451,9 +455,11 @@ calcBtn.addEventListener('click',async()=>{
     for(const def of legDefs){
       const h=await legKm(def.a,def.b,false);
       const l=await legKm(def.a,def.b,true);
+      dbgLines.push(def.label+'\n  高速OK: '+h.dbg+'\n  高速避ける: '+l.dbg);
       legs.push({label:def.label,distHighway:h.km,distLocal:l.km,kindHighway:h.kind,kindLocal:l.kind,choice:'highway'}); // 初期値は高速道路優先
     }
     pending={date,points:[...names],mode,rate};
+    document.getElementById('dbgText').textContent=new Date().toLocaleString('ja-JP')+'\n'+dbgLines.join('\n');
     renderLegChoices();
     routeChoiceEl.style.display='block';
     setStatus('','');
