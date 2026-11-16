@@ -262,7 +262,7 @@ async function legKm(a,b,avoidHighway){
     origin:{location:{latLng:{latitude:a[1],longitude:a[0]}}},
     destination:{location:{latLng:{latitude:b[1],longitude:b[0]}}},
     travelMode:"DRIVE",
-    routingPreference:"TRAFFIC_AWARE", // 本家Googleマップアプリの標準的な案内に近い、交通状況を考慮したルート
+    routingPreference:"TRAFFIC_UNAWARE", // 交通状況を見ない設定。同じ地点なら毎回同じ経路・距離になりやすい(経費精算は再現性を優先)
     requestedReferenceRoutes:["SHORTER_DISTANCE"] // 「到着時間優先」の既定ルートに加えて「距離優先」ルートも取得する
   };
   if(avoidHighway)body.routeModifiers={avoidHighways:true};
